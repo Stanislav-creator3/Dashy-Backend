@@ -1,0 +1,220 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "./generated"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("POSTGRES_URL")
+}
+
+model User {
+  id       String    @id @default(uuid())
+  email    String    @unique
+  password String
+  username String?
+  avatar   String?
+  role     Role      @default(USER)
+  projects Project[] // Пользователь может участвовать в нескольких проектах
+
+  events            Event[] // События, созданные пользователем
+  pageVisits        PageVisit[]
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  ProjectMembership ProjectMembership[]
+  WorkingHours      WorkingHours[]
+
+  @@map("users")
+}
+
+model Project {
+  id          String              @id @default(uuid())
+  name        String
+  description String?
+  // Связь "многие ко многим" с User через модель ProjectMembership
+  members     ProjectMembership[]
+  events      Event[] // События, связанные с этим проектом
+  reports     Report[] // Отчеты по этому проекту
+  pages       Page[]
+  icon        String?
+
+  User         User?    @relation(fields: [userId], references: [id])
+  userId       String?
+  previewImage String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("projects")
+}
+
+model Page {
+  id        String  @id @default(uuid())
+  title     String? @default("Без названия")
+  icon      String?
+  iconColor String?
+  cover     String?
+
+  type PageType @default(PAGE)
+
+  position   Int     @default(0)
+  isPublic   Boolean @default(false)
+  isArchived Boolean @default(false)
+
+  parentId String?
+  parent   Page?   @relation("PageHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children Page[]  @relation("PageHierarchy")
+
+  blocks     Block[]
+  pageVisits PageVisit[]
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Block {
+  id      String  @id @default(uuid())
+  tempId  String?
+  type    String
+  order   Int     @default(0)
+  content Json?   @default("[]")
+  props   Json?
+
+  parentId String?
+  parent   Block?  @relation("BlockHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children Block[] @relation("BlockHierarchy")
+
+  pageId String
+  page   Page   @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model PageVisit {
+  id        String   @id @default(uuid())
+  userId    String
+  pageId    String
+  visitedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  page Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, pageId])
+  @@index([userId, visitedAt])
+  @@index([pageId])
+  @@map("page_visits")
+}
+
+// Таблица-посредник для связи "многие ко многим" между Project и User
+model ProjectMembership {
+  id        String         @id @default(uuid())
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  project   Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+  role      MembershipRole @default(MEMBER) // Роль пользователя в проекте (например, владелец, участник)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, projectId])
+  @@map("project_memberships")
+}
+
+model Event {
+  id        String   @id @default(uuid())
+  type      String // Например: 'page_view', 'button_click', 'api_call'
+  metadata  Json? // Гибкие данные события в формате JSON
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userId    String? // Событие может быть анонимным (null)
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String? // Событие может быть не привязано к проекту
+  timestamp DateTime @default(now())
+
+  @@index([timestamp]) // Важно для быстрой агрегации по времени
+  @@index([type])
+  @@index([projectId])
+  @@map("events")
+}
+
+model Cover {
+  id        String   @id @default(cuid())
+  url       String
+  category  String
+  createdAt DateTime @default(now())
+}
+
+model WorkingHours {
+  id         String     @id @default(uuid())
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String
+  dateStart  DateTime?
+  isActive   Boolean?   @default(false)
+  dateEnd    DateTime?
+  datePause  DateTime[]
+  totalPause Int        @default(0)
+  updatedAt  DateTime   @updatedAt
+}
+
+model Report {
+  id          String     @id @default(uuid())
+  type        ReportType // Например: 'daily', 'weekly'
+  data        Json // Основные данные отчета (например, общее число событий, уникальные пользователи и т.д.)
+  project     Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId   String
+  periodStart DateTime // Начало периода, за который сформирован отчет
+  periodEnd   DateTime // Конец периода
+  generatedAt DateTime   @default(now()) // Когда отчет был создан
+
+  @@unique([projectId, type, periodStart]) // Чтобы не было дубликатов отчетов за один период
+  @@map("reports")
+}
+
+// Перечисления для чистоты данных
+
+enum Role {
+  USER
+  ADMIN
+  EDITOR
+}
+
+enum PageType {
+  PAGE
+  TODY_LIST
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum ReportType {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+enum BlockType {
+  TEXT
+  heading
+  BULLET_LIST
+  NUMBER_LIST
+  TODO_LIST
+  TOGGLE_LIST
+  CODE
+  QUOTE
+  CALL_OUT
+  DIVIDER
+  IMAGE
+  VIDEO
+  FILE
+  BOOKMARK
+  TABLE
+  COLUMN
+  EMBED
+}
