@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from 'src/core/prisma/prisma.service';
 import { StorageService } from '../libs/storage/storage.service';
 import * as sharp from 'sharp';
@@ -137,11 +137,7 @@ export class PagesService {
   async getPageList(projectId: string, parentId: string | null) {
     try {
       const pages = await this.prisma.page.findMany({
-        where: {
-          projectId: projectId,
-          parentId: parentId ?? null,
-          isArchived: false,
-        },
+        where: { projectId, isArchived: false },
         select: {
           id: true,
           title: true,
@@ -149,17 +145,20 @@ export class PagesService {
           type: true,
           parentId: true,
           position: true,
-          children: {
-            select: { id: true },
-            take: 1,
-          },
         },
-        orderBy: { createdAt: 'asc' },
+        orderBy: { position: 'asc' },
       });
-      return pages.map((page) => ({
-        ...page,
-        children: page.children.length > 0,
-      }));
+
+      const buildTree = (parent: string | null) =>
+        pages
+          .filter((page) => page.parentId === parent)
+          .sort((a, b) => a.position - b.position)
+          .map((page) => ({
+            ...page,
+            children: buildTree(page.id),
+          }));
+
+      return buildTree(parentId ?? null);
     } catch (error) {
       throw error;
     }
@@ -360,6 +359,39 @@ export class PagesService {
     return true;
   }
 
+  async reorderPages({
+    projectId,
+    pages,
+  }: {
+    projectId: string;
+    pages: { id: string; parentId: string | null; position: number }[];
+  }) {
+    const current = await this.prisma.page.findMany({
+      where: { id: { in: pages.map((p) => p.id) }, projectId },
+      select: { id: true, parentId: true },
+    });
+
+    const prevParent = new Map(current.map((p) => [p.id, p.parentId]));
+
+    await this.prisma.$transaction(async (transaction) => {
+      for (const { id, parentId, position } of pages) {
+        await transaction.page.update({
+          where: { id, projectId },
+          data: {
+            parentId: parentId,
+            position: position,
+          },
+        });
+      }
+      for (const { id, parentId } of pages) {
+        if (prevParent.get(id) === parentId) continue;
+        await this.moveLinkBlock(transaction, id, parentId);
+      }
+    });
+
+    return true;
+  }
+
   public async changeIcon(pageId: string, file: Express.Multer.File) {
     const page = await this.prisma.page.findUnique({
       where: {
@@ -484,6 +516,56 @@ export class PagesService {
         }),
       },
     });
+  }
+
+  private async moveLinkBlock(
+    transaction: Prisma.TransactionClient,
+    pageId: string,
+    newParentId: string | null,
+  ) {
+    const page = await transaction.page.findUnique({
+      where: { id: pageId },
+      select: { id: true, title: true, icon: true, type: true },
+    });
+    if (!page) return;
+
+    const link = await transaction.block.findFirst({
+      where: { type: 'LinkPage', content: { path: ['id'], equals: pageId } },
+    });
+
+    if (!newParentId) {
+      if (link) await transaction.block.delete({ where: { id: link.id } });
+      return;
+    }
+
+    const last = await transaction.block.findFirst({
+      where: { pageId: newParentId },
+      orderBy: { order: 'desc' },
+      select: { order: true },
+    });
+    const order = last ? last.order + 1 : 1;
+
+    if (link) {
+      await transaction.block.update({
+        where: { id: link.id },
+        data: { pageId: newParentId, parentId: null, order },
+      });
+    } else {
+      await transaction.block.create({
+        data: {
+          pageId: newParentId,
+          type: 'LinkPage',
+          parentId: null,
+          order,
+          content: {
+            text: page.title,
+            icon: page.icon,
+            id: page.id,
+            typePage: page.type,
+          },
+        },
+      });
+    }
   }
 
   private async trackPageVisit(pageId: string, userId?: string) {

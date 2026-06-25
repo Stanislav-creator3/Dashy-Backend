@@ -18,11 +18,21 @@ import { Authorization } from 'src/shared/decorators/auth.decorator';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { CreatePageDto } from './dto/create-page.dto';
 import { UpdatePageDto } from './dto/update-page.dto';
+import { ReorderPagesDto } from './dto/reorder-pages.dto';
 import { Authorized } from 'src/shared/decorators/authorized.decorator';
 
 @Controller(':projectId/pages')
 export class PagesController {
   constructor(private readonly pagesService: PagesService) {}
+
+  @Authorization()
+  @Patch('/reorder')
+  reorderPages(
+    @Param('projectId') projectId: string,
+    @Body() { pages }: ReorderPagesDto,
+  ) {
+    return this.pagesService.reorderPages({ projectId, pages });
+  }
 
   @Authorization()
   @Get('/all/:id')
