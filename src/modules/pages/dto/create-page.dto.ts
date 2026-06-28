@@ -15,8 +15,8 @@ export class CreatePageDto {
   parentId?: string;
 
   @IsOptional()
-  @IsInt()
-  position?: number;
+  @IsString()
+  position?: 'start' | 'end';
 
   @IsOptional()
   @IsString()

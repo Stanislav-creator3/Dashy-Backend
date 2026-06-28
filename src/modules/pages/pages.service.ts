@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from 'src/core/prisma/prisma.service';
 import { StorageService } from '../libs/storage/storage.service';
 import * as sharp from 'sharp';
@@ -166,14 +166,25 @@ export class PagesService {
 
   async create(projectId: string, createPageDto: CreatePageDto) {
     const { type, title, parentId, position } = createPageDto;
+
     try {
+      const aggregate = await this.prisma.page.aggregate({
+        where: { projectId, parentId },
+        _max: { position: true },
+        _min: { position: true },
+      });
+      const order =
+        position === 'start'
+          ? (aggregate._min.position ?? 0) - 1
+          : (aggregate._max.position ?? 0) + 1;
+
       const page = await this.prisma.page.create({
         data: {
           title: title ?? 'Без названия',
           type: type ?? PageType.PAGE,
           projectId: projectId,
           parentId: parentId ?? null,
-          position: position,
+          position: order,
         },
       });
 
